@@ -2,13 +2,13 @@ import torch
 from torchcde import cdeint
 from torchcde.interpolation_cubic import NaturalCubicSpline, natural_cubic_spline_coeffs, natural_cubic_coeffs
 from torchcde.interpolation_linear import LinearInterpolation, linear_interpolation_coeffs
-from torchdiffeq import odeint_adjoint, odeint
+from torchdiffeq import odeint_adjoint, odeint, odeint_event
 from DynaSysML.Layers import BaseLayer
 from .odefunc import defunc
 
 
 __all__ = [
-    'odeint_adjoint', 'odeint', 'NeuralODE', 'cdeint',
+    'odeint_adjoint', 'odeint', 'odeint_event', 'NeuralODE', 'cdeint',
     'natural_cubic_coeffs', 'natural_cubic_spline_coeffs', 'linear_interpolation_coeffs',
     'LinearInterpolation', 'NaturalCubicSpline'
 ]
