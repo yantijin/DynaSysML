@@ -27,6 +27,12 @@ class NeuralODE(BaseLayer):
         self.last = last
 
     def forward(self, y0, t=None, **kwargs):
+        if self.t is not None and t is None:
+            t = self.t
+        elif self.t is None and t is not None:
+            pass
+        else:
+            raise ValueError('you should add `t` when define NeuralODE or call a NeuralODE object')
         if 'event_fn' not in kwargs or ('event_fn' in kwargs and kwargs['event_fn'] is None):
             solution = odeint_adjoint(self.func, y0=y0, t=t, **kwargs)
             if self.last:
