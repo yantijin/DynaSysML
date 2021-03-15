@@ -1,11 +1,9 @@
 imageio==2.9.0
 pytorch_lightning==1.1.4
-torchvision==0.7.0+cpu
 scipy==1.6.0
 numpy==1.19.5
 tqdm==4.56.0
 pytest==6.2.1
 matplotlib==3.3.3
-torch==1.6.0+cpu
 git+https://github.com/patrick-kidger/torchcde.git
-pip install git+https://github.com/rtqichen/torchdiffeq
+git+https://github.com/rtqichen/torchdiffeq
