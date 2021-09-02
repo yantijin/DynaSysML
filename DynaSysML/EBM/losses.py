@@ -1,5 +1,5 @@
-import DynaSysML.EBM.utils as mutils
-from DynaSysML.EBM.sde_lib import *
+from .utils import get_model_fn, get_score_fn
+from .sde_lib import *
 import torch
 
 def get_sde_loss_fn(sde, train, reduce_mean=True, continuous=True, likelihood_weighting=True, eps=1e-5):
@@ -31,7 +31,7 @@ def get_sde_loss_fn(sde, train, reduce_mean=True, continuous=True, likelihood_we
         Returns:
           loss: A scalar that represents the average loss value across the mini-batch.
         """
-        score_fn = mutils.get_score_fn(
+        score_fn = get_score_fn(
             sde, model, train=train, continuous=continuous)
         t = torch.rand(
             batch.shape[0], device=batch.device) * (sde.T - eps) + eps
@@ -65,7 +65,7 @@ def get_smld_loss_fn(vesde, train, reduce_mean=False):
         torch.sum(*args, **kwargs)
 
     def loss_fn(model, batch):
-        model_fn = mutils.get_model_fn(model, train=train)
+        model_fn = get_model_fn(model, train=train)
         labels = torch.randint(
             0, vesde.N, (batch.shape[0],), device=batch.device)
         sigmas = smld_sigma_array.to(batch.device)[labels]
@@ -90,7 +90,7 @@ def get_ddpm_loss_fn(vpsde, train, reduce_mean=True):
         torch.sum(*args, **kwargs)
 
     def loss_fn(model, batch):
-        model_fn = mutils.get_model_fn(model, train=train)
+        model_fn = get_model_fn(model, train=train)
         labels = torch.randint(
             0, vpsde.N, (batch.shape[0],), device=batch.device)
         sqrt_alphas_cumprod = vpsde.sqrt_alphas_cumprod.to(batch.device)

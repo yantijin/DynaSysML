@@ -22,8 +22,7 @@ import abc
 import torch
 import numpy as np
 from tqdm import tqdm
-import DynaSysML.EBM.sde_lib as sde_lib
-import DynaSysML.EBM.utils as mutils
+from .sde_lib import VPSDE, VESDE, subVPSDE
 from .utils import from_flattened_numpy, to_flattened_numpy, get_score_fn
 from scipy import integrate
 
@@ -250,7 +249,7 @@ class AncestralSamplingPredictor(Predictor):
 
     def __init__(self, sde, score_fn, probability_flow=False):
         super().__init__(sde, score_fn, probability_flow)
-        if not isinstance(sde, sde_lib.VPSDE) and not isinstance(sde, sde_lib.VESDE):
+        if not isinstance(sde, VPSDE) and not isinstance(sde, VESDE):
             raise NotImplementedError(
                 f"SDE class {sde.__class__.__name__} not yet supported.")
         assert not probability_flow, "Probability flow not supported by ancestral sampling"
@@ -282,9 +281,9 @@ class AncestralSamplingPredictor(Predictor):
         return x, x_mean
 
     def update_fn(self, x, t):
-        if isinstance(self.sde, sde_lib.VESDE):
+        if isinstance(self.sde, VESDE):
             return self.vesde_update_fn(x, t)
-        elif isinstance(self.sde, sde_lib.VPSDE):
+        elif isinstance(self.sde, VPSDE):
             return self.vpsde_update_fn(x, t)
 
 
@@ -303,9 +302,9 @@ class NonePredictor(Predictor):
 class LangevinCorrector(Corrector):
     def __init__(self, sde, score_fn, snr, n_steps):
         super().__init__(sde, score_fn, snr, n_steps)
-        if not isinstance(sde, sde_lib.VPSDE) \
-                and not isinstance(sde, sde_lib.VESDE) \
-                and not isinstance(sde, sde_lib.subVPSDE):
+        if not isinstance(sde, VPSDE) \
+                and not isinstance(sde, VESDE) \
+                and not isinstance(sde, subVPSDE):
             raise NotImplementedError(
                 f"SDE class {sde.__class__.__name__} not yet supported.")
 
@@ -314,7 +313,7 @@ class LangevinCorrector(Corrector):
         score_fn = self.score_fn
         n_steps = self.n_steps
         target_snr = self.snr
-        if isinstance(sde, sde_lib.VPSDE) or isinstance(sde, sde_lib.subVPSDE):
+        if isinstance(sde, VPSDE) or isinstance(sde, subVPSDE):
             timestep = (t * (sde.N - 1) / sde.T).long()
             alpha = sde.alphas.to(t.device)[timestep]
         else:
@@ -343,9 +342,9 @@ class AnnealedLangevinDynamics(Corrector):
 
     def __init__(self, sde, score_fn, snr, n_steps):
         super().__init__(sde, score_fn, snr, n_steps)
-        if not isinstance(sde, sde_lib.VPSDE) \
-                and not isinstance(sde, sde_lib.VESDE) \
-                and not isinstance(sde, sde_lib.subVPSDE):
+        if not isinstance(sde, VPSDE) \
+                and not isinstance(sde, VESDE) \
+                and not isinstance(sde, subVPSDE):
             raise NotImplementedError(
                 f"SDE class {sde.__class__.__name__} not yet supported.")
 
@@ -354,7 +353,7 @@ class AnnealedLangevinDynamics(Corrector):
         score_fn = self.score_fn
         n_steps = self.n_steps
         target_snr = self.snr
-        if isinstance(sde, sde_lib.VPSDE) or isinstance(sde, sde_lib.subVPSDE):
+        if isinstance(sde, VPSDE) or isinstance(sde, subVPSDE):
             timestep = (t * (sde.N - 1) / sde.T).long()
             alpha = sde.alphas.to(t.device)[timestep]
         else:
@@ -385,7 +384,7 @@ class NoneCorrector(Corrector):
 
 def shared_predictor_update_fn(x, t, sde, model, predictor, probability_flow, continuous):
     """A wrapper that configures and returns the update function of predictors."""
-    score_fn = mutils.get_score_fn(
+    score_fn = get_score_fn(
         sde, model, train=False, continuous=continuous)
     if predictor is None:
         # Corrector-only sampler
@@ -397,7 +396,7 @@ def shared_predictor_update_fn(x, t, sde, model, predictor, probability_flow, co
 
 def shared_corrector_update_fn(x, t, sde, model, corrector, continuous, snr, n_steps):
     """A wrapper tha configures and returns the update function of correctors."""
-    score_fn = mutils.get_score_fn(
+    score_fn = get_score_fn(
         sde, model, train=False, continuous=continuous)
     if corrector is None:
         # Predictor-only sampler
