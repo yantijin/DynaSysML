@@ -12,7 +12,7 @@ class bddm_schedule(nn.Module):
         (1) 需要在DDPM训练完之后再训练此网络
         (2) 注意训练时,不要直接用本网络的所有参数,只需要对sigma_phi的参数进行训练即可
     '''
-    def __init__(self, sigma_phi, ddpm_net, T, tao, betas):
+    def __init__(self, sigma_phi, denoise_fn, T, tao, betas):
         super(bddm_schedule, self).__init__()
         self.T = T
         self.tao = tao
@@ -22,8 +22,8 @@ class bddm_schedule(nn.Module):
                              torch.tensor(np.sqrt(np.cumprod(1. - betas, axis=0)), dtype=torch.float32))
         self.sigma_phi = sigma_phi
 
-        self.ddpm_net = ddpm_net # NOTE:注意训练的时候这里参数不要加到optim中去,只加sigma_phi的参数
-        for p in self.ddpm_net.parameters():
+        self.denoise_fn = denoise_fn # NOTE:注意训练的时候这里参数不要加到optim中去,只加sigma_phi的参数
+        for p in self.denoise_fn.parameters():
             p.requires_grad = False
 
     def forward(self, x):
@@ -37,7 +37,7 @@ class bddm_schedule(nn.Module):
         delta_n = torch.sqrt(1. - alpha_n**2)
         noise = torch.randn_like(x)
         xn = alpha_n * x + delta_n * noise
-        epsilon_theta = self.ddpm_net.denoise_fn(xn, alpha_n.reshape(xn.shape[0],))
+        epsilon_theta = self.denoise_fn(xn, alpha_n.reshape(xn.shape[0],))
         beta_n = torch.minimum(delta_n**2, beta_np1) * reshape(self.sigma_phi(xn), delta_n.shape)
         Cn = 0.25 * torch.log(delta_n**2/ beta_n) + 0.5 * (beta_n / delta_n**2 - 1.)
         # print(delta_n.shape, beta_n.shape, noise.shape, epsilon_theta.shape, beta_np1.shape, self.sigma_phi(xn).shape)
@@ -58,7 +58,7 @@ class bddm_schedule(nn.Module):
             alpha = alpha / torch.sqrt(1. - beta)
             beta = torch.minimum(1-alpha**2, beta) * torch.squeeze(self.sigma_phi(x))
             beta_ls.append(beta)
-            if beta < self.ddpm_net.betas[0] :
+            if beta < self.betas[0] :
                 return torch.tensor(list(reversed(beta_ls)), dtype=torch.float32, device=self.betas.device)
             if torch.isnan(beta):
                 return torch.tensor(list(reversed(beta_ls[:-1])), dtype=torch.float32, device=self.betas.device)
@@ -68,7 +68,7 @@ class bddm_schedule(nn.Module):
     def p_sample(self, x, alpha, beta): # 这里x的batch可以设为1
         alpha_m1 = alpha / torch.sqrt(1. - beta)
         in_alpha = alpha * torch.full((x.shape[0],), 1., dtype=torch.float32, device=self.betas.device)
-        mean = 1. / torch.sqrt(1. - beta) * (x - beta/torch.sqrt(1-alpha**2) * self.ddpm_net.denoise_fn(x, in_alpha)) # TODO: 这里维度有问题
+        mean = 1. / torch.sqrt(1. - beta) * (x - beta/torch.sqrt(1-alpha**2) * self.denoise_fn(x, in_alpha)) # TODO: 这里维度有问题
         std = torch.sqrt((1-alpha_m1**2)/ (1-alpha**2) * beta)
         noise = torch.randn_like(x)
         return mean + std * noise
