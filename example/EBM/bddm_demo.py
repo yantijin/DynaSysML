@@ -116,7 +116,7 @@ eta=0.
 # plot_fig(res1, father_path+'/fig/2.jpg')
 
 
-schedule = bddm_schedule(s_phi, ddpm_net=diffusion, T=1000, tao=200, betas=betas).cuda()
+schedule = bddm_schedule(s_phi, denoise_fn=model, T=1000, tao=200, betas=betas).cuda()
 hat_alphan = torch.tensor(np.linspace(0.1, 0.9, 9), dtype=torch.float32, device='cuda:0')
 hat_betan = torch.tensor(np.linspace(0.1, 0.9, 9), dtype=torch.float32, device='cuda:0')
 optim1 = torch.optim.Adam(s_phi.parameters(), lr=1e-3)
