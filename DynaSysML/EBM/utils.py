@@ -1,6 +1,30 @@
 import numpy as np
 import torch
-import DynaSysML.EBM.sde_lib as sde_lib
+from inspect import isfunction
+from .sde_lib import VPSDE, VESDE, subVPSDE
+
+
+def exists(data):
+    return data is not None
+
+
+def extract(a, t, x_shape):
+    b, *_ = t.shape
+    out = a.gather(-1, t)
+    return out.reshape(b, *((1,) * (len(x_shape) - 1)))
+
+
+def noise_like(shape, device, repeat=False):
+    repeat_noise = lambda: torch.randn((1, *shape[1:]), device=device).repeat(shape[0], *((1,) * (len(shape) - 1)))
+    noise = lambda: torch.randn(shape, device=device)
+    return repeat_noise() if repeat else noise()
+
+
+def default(val, d):
+    if exists(val):
+        return val
+    return d() if isfunction(d) else d
+
 
 def cosine_beta_schedule(timesteps, s = 0.008):
     """
@@ -109,10 +133,10 @@ def get_score_fn(sde, model, train=False, continuous=False):
     """
     model_fn = get_model_fn(model, train=train)
 
-    if isinstance(sde, sde_lib.VPSDE) or isinstance(sde, sde_lib.subVPSDE):
+    if isinstance(sde, VPSDE) or isinstance(sde, subVPSDE):
         def score_fn(x, t):
             # Scale neural network output by standard deviation and flip sign
-            if continuous or isinstance(sde, sde_lib.subVPSDE):
+            if continuous or isinstance(sde, subVPSDE):
                 # For VP-trained models, t=0 corresponds to the lowest noise level
                 # The maximum value of time embedding is assumed to 999 for
                 # continuously-trained models.
@@ -129,7 +153,7 @@ def get_score_fn(sde, model, train=False, continuous=False):
             score = -score / std[:, None, None, None]
             return score
 
-    elif isinstance(sde, sde_lib.VESDE):
+    elif isinstance(sde, VESDE):
         def score_fn(x, t):
             if continuous:
                 labels = sde.marginal_prob(torch.zeros_like(x), t)[1]
