@@ -7,6 +7,9 @@ from .sde_lib import VPSDE, VESDE, subVPSDE
 def exists(data):
     return data is not None
 
+def reshape(out, x_shape):
+    b = out.shape[0]
+    return out.reshape(b, *((1,) * (len(x_shape) - 1)))
 
 def extract(a, t, x_shape):
     b, *_ = t.shape
@@ -150,7 +153,7 @@ def get_score_fn(sde, model, train=False, continuous=False):
                 std = sde.sqrt_1m_alphas_cumprod.to(labels.device)[
                     labels.long()]
 
-            score = -score / std[:, None, None, None]
+            score = -score / reshape(std, x.shape)
             return score
 
     elif isinstance(sde, VESDE):
@@ -181,3 +184,4 @@ def to_flattened_numpy(x):
 def from_flattened_numpy(x, shape):
     """Form a torch tensor with the given `shape` from a flattened numpy array `x`."""
     return torch.from_numpy(x.reshape(shape))
+
