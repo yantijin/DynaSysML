@@ -75,10 +75,12 @@ class gaussian_ddpm(nn.Module):
             ),
         )
 
-    def get_denoise_par(self, t, **kwargs):
-        res = {'t': t}
+    def get_denoise_par(self, t, *args, **kwargs):
+        res = (t,)
+        if args:
+            res += args
         if kwargs:
-            res.update(**kwargs)
+            res += tuple(kwargs.values())
         return res
 
     def q_sample(self, x_start, t, noise=None):
@@ -89,12 +91,12 @@ class gaussian_ddpm(nn.Module):
             extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
         )
 
-    def loss(self, x_start, t, noise=None, **kwargs):
+    def loss(self, x_start, t, noise=None, *args, **kwargs):
         noise = default(noise, lambda: torch.randn_like(x_start))
 
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-        denoise_par = self.get_denoise_par(t, **kwargs)
-        x_recon = self.denoise_fn(x_noisy, **denoise_par)
+        denoise_par = self.get_denoise_par(t, *args, **kwargs)
+        x_recon = self.denoise_fn(x_noisy, *denoise_par)
         if self.loss_type == "l1":
             loss = F.l1_loss(x_recon, noise)
         elif self.loss_type == "l2":
@@ -120,9 +122,9 @@ class gaussian_ddpm(nn.Module):
         posterior_log_variance_clipped = extract(self.posterior_log_variance_clipped, t, x_t.shape)
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
-    def p_mean_variance(self, x, t, clip_denoised: bool, **kwargs):
-        denoise_par = self.get_denoise_par(t, **kwargs)
-        x_recon = self.predict_start_from_noise(x, t=t, noise=self.denoise_fn(x, **denoise_par))
+    def p_mean_variance(self, x, t, clip_denoised: bool, *args, **kwargs):
+        denoise_par = self.get_denoise_par(t, *args, **kwargs)
+        x_recon = self.predict_start_from_noise(x, t=t, noise=self.denoise_fn(x, *denoise_par))
 
         if clip_denoised:
             x_recon.clamp_(-1., 1.)
@@ -131,31 +133,31 @@ class gaussian_ddpm(nn.Module):
         return model_mean, posterior_variance, posterior_log_variance
 
     @torch.no_grad()
-    def p_sample(self, x, t, clip_denoised=True, repeat_noise=False, **kwargs):
+    def p_sample(self, x, t, clip_denoised=True, repeat_noise=False, *args, **kwargs):
         b, *_, device = *x.shape, x.device
-        model_mean, _, model_log_variance = self.p_mean_variance(x=x, t=t, clip_denoised=clip_denoised, **kwargs)
+        model_mean, _, model_log_variance = self.p_mean_variance(x=x, t=t, clip_denoised=clip_denoised, *args, **kwargs)
         noise = noise_like(x.shape, device, repeat_noise)
         # no noise when t == 0
         nonzero_mask = (1 - (t == 0).float()).reshape(b, *((1,) * (len(x.shape) - 1)))
         return model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise
 
     @torch.no_grad()
-    def p_sample_loop(self, shape, **kwargs):
+    def p_sample_loop(self, shape, *args, **kwargs):
         device = self.betas.device
 
         b = shape[0]
         img = torch.randn(shape, device=device)
 
         for i in tqdm(reversed(range(0, self.num_timesteps)), desc='sampling loop time step', total=self.num_timesteps):
-            img = self.p_sample(img, torch.full((b,), i, device=device, dtype=torch.long), **kwargs)
+            img = self.p_sample(img, torch.full((b,), i, device=device, dtype=torch.long), *args, **kwargs)
         return img
 
     @torch.no_grad()
-    def sample(self, shape, **kwargs):
-        return self.p_sample_loop(shape, **kwargs)
+    def sample(self, shape, *args, **kwargs):
+        return self.p_sample_loop(shape, *args, **kwargs)
 
     @torch.no_grad()
-    def ddim_sample(self, shape, eta, **kwargs):
+    def ddim_sample(self, shape, eta, *args, **kwargs):
         '''
         refer to denoising diffusion implicit models
         :param shape: sample shape
@@ -170,8 +172,8 @@ class gaussian_ddpm(nn.Module):
             t = torch.full((b,), i, device=device, dtype=torch.long)
             alpha_t = extract(self.alphas_cumprod, t, x.shape)
             alpha_t_1 = extract(self.alphas_cumprod_prev, t, x.shape)
-            denoise_par = self.get_denoise_par(t, **kwargs)
-            et = self.denoise_fn(x, **denoise_par)
+            denoise_par = self.get_denoise_par(t, *args, **kwargs)
+            et = self.denoise_fn(x, *denoise_par)
             x_recon = (x-torch.sqrt(1 -alpha_t) * et) / torch.sqrt(alpha_t)
             sigma_t = eta * torch.sqrt((1 - alpha_t / alpha_t_1) * (1 - alpha_t_1) / (1 - alpha_t))
             c2 = torch.sqrt(1 - alpha_t_1 - sigma_t ** 2)
@@ -251,10 +253,12 @@ class mix_gaussian_ddpm(nn.Module):
             ),
         )
 
-    def get_denoise_par(self, t, **kwargs):
-        res = {'t': t}
+    def get_denoise_par(self, t, *args, **kwargs):
+        res = (t,)
+        if args:
+            res += args
         if kwargs:
-            res.update(**kwargs)
+            res += tuple(kwargs.values())
         return res
 
     def get_noise(self, t, shape):
@@ -275,11 +279,11 @@ class mix_gaussian_ddpm(nn.Module):
                 extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
         )
 
-    def loss(self, x, t, noise=None, **kwargs):
+    def loss(self, x, t, noise=None, *args, **kwargs):
         noise = default(noise, self.get_noise(t, x.shape))
         x_noisy = self.q_sample(x_start=x, t=t, noise=noise)
-        denoise_par = self.get_denoise_par(t, **kwargs)
-        x_recon = self.denoise_fn(x_noisy, **denoise_par)
+        denoise_par = self.get_denoise_par(t, *args, **kwargs)
+        x_recon = self.denoise_fn(x_noisy, *denoise_par)
         if self.loss_type == "l1":
             loss = F.l1_loss(x_recon, noise)
         elif self.loss_type == "l2":
@@ -306,9 +310,9 @@ class mix_gaussian_ddpm(nn.Module):
         posterior_log_variance_clipped = extract(self.posterior_log_variance_clipped, t, x_t.shape)
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
-    def p_mean_variance(self, x, t, clip_denoised: bool, **kwargs):
-        denoise_par = self.get_denoise_par(t, **kwargs)
-        x_recon = self.predict_start_from_noise(x, t=t, noise=self.denoise_fn(x, **denoise_par))
+    def p_mean_variance(self, x, t, clip_denoised: bool, *args, **kwargs):
+        denoise_par = self.get_denoise_par(t, *args, **kwargs)
+        x_recon = self.predict_start_from_noise(x, t=t, noise=self.denoise_fn(x, *denoise_par))
 
         if clip_denoised:
             x_recon.clamp_(-1., 1.)
@@ -317,9 +321,9 @@ class mix_gaussian_ddpm(nn.Module):
         return model_mean, posterior_variance, posterior_log_variance
 
     @torch.no_grad()
-    def p_sample(self, x, t, clip_denoised=True, repeat_noise=False, **kwargs):
+    def p_sample(self, x, t, clip_denoised=True, repeat_noise=False, *args, **kwargs):
         b, *_, device = *x.shape, x.device
-        model_mean, _, model_log_variance = self.p_mean_variance(x=x, t=t, clip_denoised=clip_denoised, **kwargs)
+        model_mean, _, model_log_variance = self.p_mean_variance(x=x, t=t, clip_denoised=clip_denoised, *args, **kwargs)
         # noise = noise_like(x.shape, device, repeat_noise)
         noise = self.get_noise(t, shape=x.shape)
         # no noise when t == 0
@@ -327,7 +331,7 @@ class mix_gaussian_ddpm(nn.Module):
         return model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise
 
     @torch.no_grad()
-    def p_sample_loop(self, shape, **kwargs):
+    def p_sample_loop(self, shape, *args, **kwargs):
         device = self.betas.device
 
         b = shape[0]
@@ -335,12 +339,12 @@ class mix_gaussian_ddpm(nn.Module):
         img = self.get_noise(T, shape)
 
         for i in tqdm(reversed(range(0, self.num_timesteps)), desc='sampling loop time step', total=self.num_timesteps):
-            img = self.p_sample(img, torch.full((b,), i, device=device, dtype=torch.long), **kwargs)
+            img = self.p_sample(img, torch.full((b,), i, device=device, dtype=torch.long), *args, **kwargs)
         return img
 
     @torch.no_grad()
-    def sample(self, shape, **kwargs):
-        return self.p_sample_loop(shape, **kwargs)
+    def sample(self, shape, *args, **kwargs):
+        return self.p_sample_loop(shape, *args, **kwargs)
 
     def forward(self, x, *args, **kwargs):
         b, *_ = x.shape
