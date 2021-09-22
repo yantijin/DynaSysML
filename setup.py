@@ -76,7 +76,7 @@ setup(
     install_requires=['numpy>=1.18.0',
                       'scipy>=1.4.0',
                       'torchdiffeq>=0.1.1',
-                      'torchcde'
+                      'torchcde',
                       'six'],
 
     # List additional groups of dependencies here (e.g. development
