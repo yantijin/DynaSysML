@@ -148,7 +148,7 @@ class gaussian_ddpm(nn.Module):
         b = shape[0]
         img = torch.randn(shape, device=device)
 
-        for i in tqdm(reversed(range(0, self.num_timesteps)), desc='sampling loop time step', total=self.num_timesteps):
+        for i in reversed(range(0, self.num_timesteps)):#, desc='sampling loop time step', total=self.num_timesteps):
             img = self.p_sample(img, torch.full((b,), i, device=device, dtype=torch.long), *args, **kwargs)
         return img
 
@@ -168,7 +168,7 @@ class gaussian_ddpm(nn.Module):
         b = shape[0]
         x = torch.randn(shape, device=device)
 
-        for i in tqdm(reversed(range(0, self.num_timesteps)), desc='sampling loop time step', total=self.num_timesteps):
+        for i in reversed(range(0, self.num_timesteps)): #, desc='sampling loop time step', total=self.num_timesteps):
             t = torch.full((b,), i, device=device, dtype=torch.long)
             alpha_t = extract(self.alphas_cumprod, t, x.shape)
             alpha_t_1 = extract(self.alphas_cumprod_prev, t, x.shape)
@@ -338,7 +338,7 @@ class mix_gaussian_ddpm(nn.Module):
         T = torch.full((b,), self.num_timesteps-1, device=device, dtype=torch.long)
         img = self.get_noise(T, shape)
 
-        for i in tqdm(reversed(range(0, self.num_timesteps)), desc='sampling loop time step', total=self.num_timesteps):
+        for i in reversed(range(0, self.num_timesteps)): #, desc='sampling loop time step', total=self.num_timesteps):
             img = self.p_sample(img, torch.full((b,), i, device=device, dtype=torch.long), *args, **kwargs)
         return img
 

@@ -69,7 +69,7 @@ class bddm_schedule(nn.Module):
             beta = torch.minimum(1-alpha**2, beta) * torch.squeeze(self.sigma_phi(x))
             beta_ls.append(beta)
             if beta < self.betas[0] :
-                return torch.tensor(list(reversed(beta_ls)), dtype=torch.float32, device=self.betas.device)
+                return torch.tensor(list(reversed(beta_ls[:-1])), dtype=torch.float32, device=self.betas.device)
             if torch.isnan(beta):
                 return torch.tensor(list(reversed(beta_ls[:-1])), dtype=torch.float32, device=self.betas.device)
         return torch.tensor(list(reversed(beta_ls)), dtype=torch.float32, device=self.betas.device)
