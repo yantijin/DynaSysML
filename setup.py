@@ -75,7 +75,7 @@ setup(
     # https://packaging.python.org/en/latest/requirements.html
     install_requires=['numpy>=1.18.0',
                       'scipy>=1.4.0',
-                      'torchdiffeq>=0.1.1',
+                      'torchdiffeq',
                       'torchcde',
                       'six'],
 
