@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from scipy import special
 import numpy as np
-
+from tqdm import tqdm
 
 def get_transition_mat(beta, t, K, transition_bands, method='uniform'):
     beta_t = beta[t]
@@ -217,8 +217,11 @@ class categorical_diffusion(nn.Module):
         bin_centers = bin_centers - loc
         log_cdf_min = torch.nn.functional.logsigmoid(inv_scale*(bin_centers - 0.5*bin_width))
         log_cdf_plus = torch.nn.functional.logsigmoid(inv_scale*(bin_centers + 0.5*bin_width))
+        assert torch.sum(torch.isnan(log_cdf_min)) == 0
+        assert torch.sum(torch.isnan(log_cdf_plus)) == 0
         
-        logits = log_min_exp(log_cdf_min, log_cdf_plus, self.eps)
+        logits = log_min_exp(log_cdf_plus, log_cdf_min, self.eps)
+        assert torch.sum(torch.isnan(logits)) == 0
         return logits
 
     def p_logits(self, model_fn, *, x, t):
@@ -226,10 +229,13 @@ class categorical_diffusion(nn.Module):
         # print(x.dtype, t.dtype)
         model_output = model_fn(x, t)
         if self.model_output == 'logits':
+            assert torch.sum(torch.isnan(model_output)) == 0
             model_logits = model_output
         elif self.model_output == 'logistic_pars':
             # get logits out of discretized logistic discretization
             loc, log_scale = model_output
+            assert torch.sum(torch.isnan((loc))) == 0
+            assert torch.sum(torch.isnan(log_scale)) == 0
             model_logits = self._get_logits_from_logistic_pars(loc, log_scale)
         else:
             raise NotImplementedError(self.model_output)
@@ -249,6 +255,7 @@ class categorical_diffusion(nn.Module):
     
         return model_logits, pred_x_start_logits
 
+    @torch.no_grad()
     def p_sample(self, model_fn, x, t, noise):
         model_logits, pred_x_start_logits = self.p_logits(model_fn=model_fn, x=x, t=t)
         assert noise.shape == model_logits.shape, noise.shape
@@ -258,7 +265,8 @@ class categorical_diffusion(nn.Module):
         gumbel_noise = -torch.log(-torch.log(noise))
         sample = torch.argmax(model_logits + nonzero_mask*gumbel_noise, dim=-1)
         return sample, torch.softmax(pred_x_start_logits, dim=-1)
-    
+
+    @torch.no_grad()
     def p_sample_loop(self, model_fn, shape, num_timesteps=None):
         '''
         ancestral sampling methods
@@ -266,20 +274,20 @@ class categorical_diffusion(nn.Module):
         # init_rng, body_rng = np.random.split(rng)
         # del rng
         noise_shape = shape + (self.num_pixel_values, )
-        def bofy_func(i, x):
-            t = torch.full((shape[0]), self.num_timesteps-1-i, dtype=torch.long)
+        def body_func(i, x):
+            t = torch.full((shape[0],), self.num_timesteps-1-i, dtype=torch.long).to(self.betas.device)
             x, _ = self.p_sample(
                 model_fn=model_fn,
                 x=x,
                 t=t,
-                noise=torch.rand(noise_shape).cuda() #TODO: 这里需要有device
+                noise=torch.rand(noise_shape).to(self.betas.device) #TODO: 这里需要有device
             )
             return x
 
         if self.method in ['gaussian', 'uniform']:
-            x_init = torch.randint(0, self.num_pixel_values, noise_shape)
+            x_init = torch.randint(0, self.num_pixel_values, shape).to(self.betas.device)
         elif self.method == 'absorb':
-            x_init = torch.full(shape, self.num_pixel_values//2, dtype=torch.long)
+            x_init = torch.full(shape, self.num_pixel_values//2, dtype=torch.long).to(self.betas.device)
         else:
             raise NotImplementedError(self.method)
 
@@ -287,8 +295,8 @@ class categorical_diffusion(nn.Module):
         if num_timesteps is None:
             num_timesteps = self.num_timesteps
 
-        for i in range(0, num_timesteps):
-            x_init = bofy_func(i, x_init)
+        for i in tqdm(range(0, num_timesteps), desc='sampling loop time step', total=self.num_timesteps):
+            x_init = body_func(i, x_init)
         
         return x_init
 
@@ -308,8 +316,12 @@ class categorical_diffusion(nn.Module):
             the denoised image.
         """
         true_logits = self.q_posterior_logits(x_start, x_t, t, x_start_logits=False)
+        assert torch.sum(torch.isnan(true_logits)) == 0
         model_logits, pred_x_start_logits = self.p_logits(model_fn, x=x_t, t=t)
+        assert torch.sum(torch.isnan(model_logits)) == 0
+        assert torch.sum(torch.isnan(pred_x_start_logits)) == 0
         kl = categorical_kl_logits(true_logits, model_logits)
+        assert torch.sum(torch.isnan(kl)) == 0
         kl = torch.mean(kl, dim=list(range(1, len(kl.shape)))) / np.log(2.)
 
         decoder_nll = - categorical_log_likelihood(x_start, model_logits)
@@ -345,9 +357,10 @@ class categorical_diffusion(nn.Module):
 
     def training_losses(self, model_fn, x_start):
         # print(self.transpose_q_onestep_mats.device, self.q_onestep_mats.device, self.q_mats.device, self.betas.device)
-        noise = torch.rand(x_start.shape+(self.num_pixel_values,)).cuda()
+        noise = torch.rand(x_start.shape+(self.num_pixel_values,)).to(x_start.device)
         t = torch.randint(0, self.num_timesteps, (x_start.shape[0], )).long().to(x_start.device)
         x_t = self.q_sample(x_start=x_start, t=t, noise=noise)
+        assert torch.sum(torch.isnan(x_t)) == 0
         if self.loss_type == 'kl':
             losses, _ = self.vb_terms_bpd(model_fn=model_fn, x_start=x_start, x_t=x_t, t=t)
         elif self.loss_type == 'cross_entropy_x_start':
@@ -356,7 +369,10 @@ class categorical_diffusion(nn.Module):
         
         elif self.loss_type == 'hybrid':
             vb_losses, pred_x_start_logits = self.vb_terms_bpd(model_fn=model_fn, x_start=x_start, x_t=x_t, t=t)
+            assert torch.sum(torch.isnan(vb_losses)) == 0
+            assert torch.sum(torch.isnan(pred_x_start_logits)) == 0
             ce_losses = self.cross_entropy_x_start(x_start=x_start, pred_x_start_logits=pred_x_start_logits)
+            assert torch.sum(torch.isnan(ce_losses)) == 0
             losses = vb_losses + self.hybrid_coeff * ce_losses
         else:
             raise NotImplementedError(self.loss_type)
