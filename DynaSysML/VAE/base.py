@@ -11,9 +11,11 @@ class VAE(nn.Module):
                  prior_dist,
                  encode_dist,
                  decode_dist,
-                 flow=None):
+                 flow=None,
+                 num_samples=None):
         super(VAE, self).__init__()
         # 注意这里encoder, decoder以及prior_dist, flow(optional)已经提前写好了！！
+        # 注意decoder中的输入z的形状为[ns, bs, ...]
         self.in_shape = in_shape
         self.hidden_dim = hidden_dim
         self.encoder = encoder
@@ -22,31 +24,35 @@ class VAE(nn.Module):
         self.enc_dist = encode_dist
         self.dec_dist = decode_dist
         self.flow = flow
+        if num_samples is not None:
+            self.num_samples = num_samples
+        else:
+            self.num_samples = 1
 
     def forward(self, x):
-        enc_dist = self.enc_dist(self.encoder(x))
-        z = enc_dist.rsample()
+        enc_dist = self.enc_dist(*self.encoder(x))
+        z = enc_dist.rsample((self.num_samples,)) # [ns, b, ...]
         if self.flow is not None:
             z, _ = self.flow(z)
-        dec_dist = self.dec_dist(self.dec_dist(z))
+        dec_dist = self.dec_dist(*self.dec_dist(z))
         return enc_dist, dec_dist
 
     def logqz_x(self, enc_dist):
-        logqz_x = torch.mean(torch.sum(enc_dist.log_prob(enc_dist.rsample()), dim=list(range(1, len(self.in_shape)))))
+        logqz_x = torch.mean(torch.sum(enc_dist.log_prob(enc_dist.rsample((self.num_samples, ))), dim=list(range(2, len(self.in_shape)))))
         return logqz_x
 
     def logpx_z(self, dec_dist, x): # 注意这里的x和forward里面的x一定要对应好
-        return torch.mean(torch.sum(dec_dist.log_prob(x), dim=list(range(1, len(self.in_shape)))))
+        return torch.mean(torch.sum(dec_dist.log_prob(x.expand(self.num_samples, *x.shape)), dim=list(range(2, len(self.in_shape)))))
 
     def logp_z(self, prior_dist, enc_dist):
         if self.flow is not None:
-            z, log_det = self.flow(enc_dist.rsample())
+            z, log_det = self.flow(enc_dist.rsample((self.num_samples, )))
         else:
-            z = enc_dist.rsample()
+            z = enc_dist.rsample((self.num_samples, ))
             log_det = None
-        logp_zk = torch.mean(torch.sum(prior_dist.log_prob(z), dim=list(range(1, len(self.in_shape)))))
+        logp_zk = torch.mean(torch.sum(prior_dist.log_prob(z), dim=list(range(2, len(self.in_shape)))))
         if log_det:
-            logp_zk += log_det
+            logp_zk += torch.mean(log_det)
         return logp_zk
 
     def base_loss(self, prior_dist, enc_dist, dec_dist, x):
