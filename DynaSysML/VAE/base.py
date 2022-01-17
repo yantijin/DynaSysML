@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import math
 
 
 class VAE(nn.Module):
@@ -61,5 +62,15 @@ class VAE(nn.Module):
         logp_z = self.logp_z(prior_dist, enc_dist)
         loss = - (logpx_z + logp_z - logqz_x)
         return loss
+
+    def cygen_loss(self, prior_dist, enc_dist, dec_dist, x):
+        # see NeurIPS'21 `on the generative utility of cylic conditionals` https://arxiv.org/abs/2106.15962
+        # fitting data loss:
+        l1 = torch.sum(dec_dist.log_prob(x.expand((self.num_samples, *x.shape))), dim=list(range(2, len(self.in_shape))))
+        loss1 = torch.mean(torch.logsumexp(-l1, dim=0) - math.log(self.num_samples))
+        # compatability:
+        
+
+
 
 
