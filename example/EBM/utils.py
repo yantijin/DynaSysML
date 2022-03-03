@@ -7,8 +7,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-def plot_fig(res, path=None):
-    n = 6
+def plot_fig(res, path=None, n=6, show=False):
+    # n = 6
     digit_size = 28
     figure = np.zeros((28 * n, 28 * n))
     for i in range(n):
@@ -17,12 +17,13 @@ def plot_fig(res, path=None):
             j * digit_size: (j + 1) * digit_size] = res[n * i + j, 0, :, :]
 
     plt.figure()
-    plt.imshow(figure, cmap='gray')
+    if show:
+        plt.imshow(figure, cmap='gray')
     if path:
         plt.savefig(path)
     return figure
 
-def get_mnist_loaders(data_aug=False, batch_size=128, test_batch_size=1000, perc=1.0):
+def get_mnist_loaders(data_aug=False, batch_size=128, test_batch_size=1000, perc=1.0, num=0):
     if data_aug:
         transform_train = transforms.Compose([
             transforms.RandomCrop(28, padding=4),
@@ -39,17 +40,17 @@ def get_mnist_loaders(data_aug=False, batch_size=128, test_batch_size=1000, perc
 
     train_loader = DataLoader(
         datasets.MNIST(root='../data/', train=True, download=True, transform=transform_train), batch_size=batch_size,
-        shuffle=True, num_workers=8, drop_last=True
+        shuffle=True, num_workers=num, drop_last=True
     )
 
     train_eval_loader = DataLoader(
         datasets.MNIST(root='../data/', train=True, download=True, transform=transform_test),
-        batch_size=test_batch_size, shuffle=False, num_workers=8, drop_last=True
+        batch_size=test_batch_size, shuffle=False, num_workers=num, drop_last=True
     )
 
     test_loader = DataLoader(
         datasets.MNIST(root='../data/', train=False, download=True, transform=transform_test),
-        batch_size=test_batch_size, shuffle=False, num_workers=8, drop_last=True
+        batch_size=test_batch_size, shuffle=False, num_workers=num, drop_last=True
     )
 
     return train_loader, test_loader, train_eval_loader
