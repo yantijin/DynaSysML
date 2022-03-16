@@ -45,7 +45,7 @@ class gaussian_ddpm_gen(gaussian_ddpm):
     @torch.no_grad()
     def p_sample(self, x, t, clip_denoised=True, repeat_noise=False, *args, **kwargs):
         denoise_par = self.get_denoise_par(t, *args, **kwargs)
-        denoise_par += (torch.randn(x.shape[0], self.z_dim).to(x.device), )
+        denoise_par = tuple([denoise_par[0], torch.randn(x.shape[0], self.z_dim).to(x.device), *denoise_par[1:]])
         x_0_pred = self.denoise_fn(x, *denoise_par)
 
         if clip_denoised:
@@ -55,6 +55,7 @@ class gaussian_ddpm_gen(gaussian_ddpm):
         self.xs.append(x_t_1)
         return x_t_1
 
+    @torch.no_grad()
     def p_sample_loop(self, shape, *args, **kwargs):
         device = self.betas.device
 
@@ -75,39 +76,39 @@ class diffusion_gan():
         self.diffusion_gen = gaussian_ddpm_gen(denoise_fn, betas, z_dim=z_dim).to(device)
         self.gamma = gamma
 
-    def gloss(self, x, *args, **kwargs):
-        x_0_pred, x_t, _, x_t_1_pred, t = self.diffusion_gen(x, *args, **kwargs)
-        out = self.dis(x_t, x_t_1_pred, t)
+    def gloss(self, x, z, *args, **kwargs):
+        x_0_pred, x_t, _, x_t_1_pred, t = self.diffusion_gen(x, z, *args, **kwargs)
+        out = self.dis(x_t, x_t_1_pred, t, *args, **kwargs)
         # print(out.shape)
         gloss = -torch.mean(torch.log(out + 1e-8))
         return gloss
 
-    def dloss(self, x, grad_penal=True, *args, **kwargs):
-        x_0_pred, x_t, x_t_1, x_t_1_pred, t = self.diffusion_gen(x, *args, **kwargs)
-        out1 = self.dis(x_t, x_t_1, t)
-        out2 = self.dis(x_t, x_t_1_pred, t)
+    def dloss(self, x, z, grad_penal=True, *args, **kwargs):
+        x_0_pred, x_t, x_t_1, x_t_1_pred, t = self.diffusion_gen(x, z, *args, **kwargs)
+        out1 = self.dis(x_t, x_t_1, t, *args, **kwargs)
+        out2 = self.dis(x_t, x_t_1_pred, t, *args, **kwargs)
         dloss = -(torch.mean(torch.log(out1 + 1e-8)) + torch.mean(torch.log(1-out2+1e-8)))
         if grad_penal:
-            dloss += self.gamma / 2 * torch.mean(self.gradient_panalty(x_t, x_t_1, t))
+            dloss += self.gamma / 2 * torch.mean(self.gradient_panalty(x_t, x_t_1, t, *args, **kwargs))
         return dloss
 
-    def gradient_panalty(self, x_t, x_t_1, t):
+    def gradient_panalty(self, x_t, x_t_1, t, *args, **kwargs):
         x_t_1.requires_grad_(True)
-        out = self.dis(x_t, x_t_1, t)
+        out = self.dis(x_t, x_t_1, t, *args, **kwargs)
         # print(out.requires_grad, x_t_1.requires_grad)
         grad = torch.autograd.grad(out, x_t_1, grad_outputs=torch.ones_like(out), retain_graph=True, create_graph=True)[0]
         return grad**2
 
-    def train_gen_step(self, x, optim, *args, **kwargs):
+    def train_gen_step(self, x, optim, z, *args, **kwargs):
         optim.zero_grad()
-        gloss = self.gloss(x, *args, **kwargs)
+        gloss = self.gloss(x, z, *args, **kwargs)
         gloss.backward()
         optim.step()
         return gloss
 
-    def train_dis_step(self, x, optim, *args, **kwargs):
+    def train_dis_step(self, x, optim, z, *args, **kwargs):
         optim.zero_grad()
-        dloss = self.dloss(x, *args, **kwargs)
+        dloss = self.dloss(x, z, *args, **kwargs)
         dloss.backward()
         optim.step()
         return dloss
