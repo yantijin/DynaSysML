@@ -45,5 +45,5 @@ for epoch in range(epochs):
 
 shape = (36, 1, 28, 28)
 samples = diffusion.p_sample_loop(md, shape, num_timesteps=None)
-plot_fig(samples.detach().cpu().numpy())
+plot_fig(samples.detach().cpu().numpy(), show=True)
 plt.show()

@@ -3,6 +3,7 @@ import copy
 import torch
 from torch import nn, einsum
 import torch.nn.functional as F
+from torch.nn.utils import spectral_norm
 from inspect import isfunction
 from einops import rearrange
 import numpy as np
@@ -779,24 +780,365 @@ class Dis(nn.Module):
         return x
 
 
+class Cond_logistic_gen(nn.Module):
+    def __init__(
+        self,
+        dim,
+        out_dim = None,
+        dim_mults=(1, 2, 4, 8),
+        groups = 8,
+        latent_dim=100,
+        channels = 3,
+        with_time_emb = True,
+        with_cond_emb = True
+    ):
+        super().__init__()
+        self.channels = channels
+
+        dims = [channels, *map(lambda m: dim * m, dim_mults)]
+        in_out = list(zip(dims[:-1], dims[1:]))
+
+        if with_time_emb:
+            time_dim = dim
+            self.time_mlp = nn.Sequential(
+                SinusoidalPosEmb(dim),
+                nn.Linear(dim, dim * 4),
+                Mish(),
+                nn.Linear(dim * 4, dim)
+            )
+        else:
+            time_dim = None
+            self.time_mlp = None
+
+        if with_cond_emb:
+            self.cond_mlp = nn.Sequential(
+                nn.Linear(latent_dim, dim * 4),
+                Mish(),
+                nn.Linear(dim * 4, dim)
+            )
+        else:
+            self.cond_mlp = None
+
+        self.downs = nn.ModuleList([])
+        self.ups = nn.ModuleList([])
+        num_resolutions = len(in_out)
+
+        for ind, (dim_in, dim_out) in enumerate(in_out):
+            is_last = ind >= (num_resolutions - 1)
+
+            self.downs.append(nn.ModuleList([
+                Cond_ResnetBlock(dim_in, dim_out, time_emb_dim=time_dim, cond_dim=dim),
+                Cond_ResnetBlock(dim_out, dim_out, time_emb_dim=time_dim, cond_dim=dim),
+                Residual(PreNorm(dim_out, LinearAttention(dim_out))),
+                Downsample(dim_out) if not is_last else nn.Identity()
+            ]))
+
+        mid_dim = dims[-1]
+        self.mid_block1 = Cond_ResnetBlock(mid_dim, mid_dim, time_emb_dim=time_dim, cond_dim=dim)
+        self.mid_attn = Residual(PreNorm(mid_dim, LinearAttention(mid_dim)))
+        self.mid_block2 = Cond_ResnetBlock(mid_dim, mid_dim, time_emb_dim=time_dim, cond_dim=dim)
+
+        for ind, (dim_in, dim_out) in enumerate(reversed(in_out[1:])):
+            is_last = ind >= (num_resolutions - 1)
+
+            self.ups.append(nn.ModuleList([
+                Cond_ResnetBlock(dim_out * 2, dim_in, time_emb_dim=time_dim, cond_dim=dim),
+                Cond_ResnetBlock(dim_in, dim_in, time_emb_dim=time_dim, cond_dim=dim),
+                Residual(PreNorm(dim_in, LinearAttention(dim_in))),
+                Upsample(dim_in) if not is_last else nn.Identity()
+            ]))
+
+        out_dim = default(out_dim, channels)
+        self.final_conv = nn.Sequential(
+            Block(dim, dim),
+            nn.Conv2d(dim, out_dim*2, 1)
+        )
+
+    def forward(self, x, t, cond):
+        x = x/255. # normalize data
+        t = self.time_mlp(t) if exists(self.time_mlp) else None
+        cond = self.cond_mlp(cond) if exists(self.cond_mlp) else None
+
+        h = []
+
+        for resnet, resnet2, attn, downsample in self.downs:
+            x = resnet(x, cond, t)
+            x = resnet2(x, cond, t)
+            x = attn(x)
+            h.append(x)
+            x = downsample(x)
+
+        x = self.mid_block1(x, cond, t)
+        x = self.mid_attn(x)
+        x = self.mid_block2(x, cond, t)
+
+        for resnet, resnet2, attn, upsample in self.ups:
+            x = torch.cat((x, h.pop()), dim=1)
+            x = resnet(x, cond, t)
+            x = resnet2(x, cond, t)
+            x = attn(x)
+            x = upsample(x)
+
+        res = self.final_conv(x)
+        loc = torch.sigmoid(res[:, :self.channels])
+        log_scale = res[:, self.channels:]
+        return loc, log_scale
+
+
+class c_Gen(nn.Module):
+    def __init__(
+        self,
+        dim,
+        out_dim = None,
+        dim_mults=(1, 2, 4, 8),
+        groups = 8,
+        latent_dim=100,
+        channels = 3,
+        num_classes=10,
+        with_time_emb = True,
+        with_cond_emb = True,
+    ):
+        super().__init__()
+        self.channels = channels + num_classes
+
+        dims = [channels+num_classes, *map(lambda m: dim * m, dim_mults)]
+        in_out = list(zip(dims[:-1], dims[1:]))
+
+        if with_time_emb:
+            time_dim = dim
+            self.time_mlp = nn.Sequential(
+                SinusoidalPosEmb(dim),
+                nn.Linear(dim, dim * 4),
+                Mish(),
+                nn.Linear(dim * 4, dim)
+            )
+        else:
+            time_dim = None
+            self.time_mlp = None
+
+        if with_cond_emb:
+            self.cond_mlp = nn.Sequential(
+                nn.Linear(latent_dim+num_classes, dim * 4),
+                Mish(),
+                nn.Linear(dim * 4, dim)
+            )
+        else:
+            self.cond_mlp = None
+
+        self.downs = nn.ModuleList([])
+        self.ups = nn.ModuleList([])
+        num_resolutions = len(in_out)
+
+        for ind, (dim_in, dim_out) in enumerate(in_out):
+            is_last = ind >= (num_resolutions - 1)
+
+            self.downs.append(nn.ModuleList([
+                Cond_ResnetBlock(dim_in, dim_out, time_emb_dim = time_dim, cond_dim=dim),
+                Cond_ResnetBlock(dim_out, dim_out, time_emb_dim = time_dim, cond_dim=dim),
+                Residual(PreNorm(dim_out, LinearAttention(dim_out))),
+                Downsample(dim_out) if not is_last else nn.Identity()
+            ]))
+
+        mid_dim = dims[-1]
+        self.mid_block1 = Cond_ResnetBlock(mid_dim, mid_dim, time_emb_dim = time_dim, cond_dim=dim)
+        self.mid_attn = Residual(PreNorm(mid_dim, LinearAttention(mid_dim)))
+        self.mid_block2 = Cond_ResnetBlock(mid_dim, mid_dim, time_emb_dim = time_dim, cond_dim=dim)
+
+        for ind, (dim_in, dim_out) in enumerate(reversed(in_out[1:])):
+            is_last = ind >= (num_resolutions - 1)
+
+            self.ups.append(nn.ModuleList([
+                Cond_ResnetBlock(dim_out * 2, dim_in, time_emb_dim = time_dim, cond_dim=dim),
+                Cond_ResnetBlock(dim_in, dim_in, time_emb_dim = time_dim, cond_dim=dim),
+                Residual(PreNorm(dim_in, LinearAttention(dim_in))),
+                Upsample(dim_in) if not is_last else nn.Identity()
+            ]))
+
+        out_dim = default(out_dim, channels)
+        self.final_conv = nn.Sequential(
+            Block(dim, dim),
+            nn.Conv2d(dim, out_dim, 1)
+        )
+
+    def forward(self, x, t, cond, label):
+        label_emb = torch.nn.functional.one_hot(label, 10).float() # mnist一共有10类
+        cond = torch.cat([cond, label_emb], dim=1) #[bs, cond_dim+10]
+        label_emb = label_emb.unsqueeze(-1).unsqueeze(-1) #[bs, 10, 1, 1]
+        x = torch.cat([x, label_emb*torch.ones_like(x)], dim=1) #[bs, c+10, 28, 28]
+        t = self.time_mlp(t) if exists(self.time_mlp) else None
+        cond = self.cond_mlp(cond) if exists(self.cond_mlp) else None
+        h = []
+
+        for resnet, resnet2, attn, downsample in self.downs:
+            x = resnet(x, cond, t)
+            x = resnet2(x, cond, t)
+            x = attn(x)
+            h.append(x)
+            x = downsample(x)
+
+        x = self.mid_block1(x, cond, t)
+        x = self.mid_attn(x)
+        x = self.mid_block2(x, cond, t)
+
+        for resnet, resnet2, attn, upsample in self.ups:
+            x = torch.cat((x, h.pop()), dim=1)
+            x = resnet(x, cond, t)
+            x = resnet2(x, cond, t)
+            x = attn(x)
+            x = upsample(x)
+
+        return self.final_conv(x)
+
+
+class c_Dis(nn.Module):
+    def __init__(
+        self,
+        dim,
+        out_dim = None,
+        dim_mults=(1, 2, 4, 8),
+        groups = 8,
+        latent_dim=100,
+        channels = 3,
+        num_classes=10,
+        with_time_emb = True,
+        with_cond_emb = True,
+    ):
+        super().__init__()
+        self.channels = channels
+
+        dims = [channels, *map(lambda m: dim * m, dim_mults)]
+        in_out = list(zip(dims[:-1], dims[1:]))
+
+        if with_time_emb:
+            time_dim = dim
+            self.time_mlp = nn.Sequential(
+                SinusoidalPosEmb(dim),
+                nn.Linear(dim, dim * 4),
+                Mish(),
+                nn.Linear(dim * 4, dim)
+            )
+        else:
+            time_dim = None
+            self.time_mlp = None
+
+        if with_cond_emb:
+            self.cond_mlp = nn.Sequential(
+                nn.Linear(num_classes, dim * 4),
+                Mish(),
+                nn.Linear(dim * 4, dim)
+            )
+        else:
+            self.cond_mlp = None
+
+        self.downs = nn.ModuleList([])
+        self.ups = nn.ModuleList([])
+        num_resolutions = len(in_out)
+
+        for ind, (dim_in, dim_out) in enumerate(in_out):
+            is_last = ind >= (num_resolutions - 1)
+
+            self.downs.append(nn.ModuleList([
+                Cond_ResnetBlock(dim_in, dim_out, time_emb_dim = time_dim, cond_dim=dim),
+                Cond_ResnetBlock(dim_out, dim_out, time_emb_dim = time_dim, cond_dim=dim),
+                Residual(PreNorm(dim_out, LinearAttention(dim_out))),
+                Downsample(dim_out) if not is_last else nn.Identity()
+            ]))
+
+        mid_dim = dims[-1]
+        self.mid_block1 = Cond_ResnetBlock(mid_dim, mid_dim, time_emb_dim = time_dim, cond_dim=dim)
+        self.mid_attn = Residual(PreNorm(mid_dim, LinearAttention(mid_dim)))
+        self.mid_block2 = Cond_ResnetBlock(mid_dim, mid_dim, time_emb_dim = time_dim, cond_dim=dim)
+        self.pool = nn.AvgPool2d(kernel_size=4)
+        self.final_l = nn.Sequential(
+            nn.Linear(dim * dim_mults[-1], 1),
+            nn.Sigmoid()
+        )
+
+        # for ind, (dim_in, dim_out) in enumerate(reversed(in_out[1:])):
+        #     is_last = ind >= (num_resolutions - 1)
+        #
+        #     self.ups.append(nn.ModuleList([
+        #         Cond_ResnetBlock(dim_out * 2, dim_in, time_emb_dim = time_dim, cond_dim=dim),
+        #         Cond_ResnetBlock(dim_in, dim_in, time_emb_dim = time_dim, cond_dim=dim),
+        #         Residual(PreNorm(dim_in, LinearAttention(dim_in))),
+        #         Upsample(dim_in) if not is_last else nn.Identity()
+        #     ]))
+        #
+        # out_dim = default(out_dim, channels)
+        # self.final_conv = nn.Sequential(
+        #     Block(dim, dim),
+        #     nn.Conv2d(dim, out_dim, 1)
+        # )
+
+    def forward(self, xt, xt_1, t, label):
+        label_emb = torch.nn.functional.one_hot(label, 10).float() # [bs, 10]
+        batch = xt.shape[0]
+        x = torch.cat([xt, xt_1], dim=1)
+        t = self.time_mlp(t) if exists(self.time_mlp) else None
+        cond = self.cond_mlp(label_emb) if exists(self.cond_mlp) else None
+        h = []
+
+        for resnet, resnet2, attn, downsample in self.downs:
+            x = resnet(x, cond, t)
+            x = resnet2(x, cond, t)
+            x = attn(x)
+            h.append(x)
+            x = downsample(x)
+
+        x = self.mid_block1(x, cond, t)
+        x = self.mid_attn(x)
+        x = self.mid_block2(x, cond, t)
+        x = self.pool(x) * 4
+        x = self.final_l(x.view(batch, -1))
+        # for resnet, resnet2, attn, upsample in self.ups:
+        #     x = torch.cat((x, h.pop()), dim=1)
+        #     x = resnet(x, cond, t)
+        #     x = resnet2(x, cond, t)
+        #     x = attn(x)
+        #     x = upsample(x)
+
+        return x
 
 
 if __name__ == "__main__":
     # a = torch.randn(32, 3, 28, 28)
     # time = torch.randint(0, 1000, (32,),device=a.device).long()
     # cond = torch.randint(0, 10, (32,), device=a.device).long()
-    # # md = Cond_Unet(32, channels=3, dim_mults=(1, 2, 4))
+    # cond_gen = torch.randn(32, 100)
+    # md = Cond_Unet(32, channels=3, dim_mults=(1, 2, 4))
     # md = logistic_Unet(16, channels=3, dim_mults=(1, 2, 4))
+    # md = Cond_logistic_gen(16, channels=3, dim_mults=(1, 2, 4))
     # # res = md(a, time, cond)
-    # loc, log_scale = md(a, time)
+    # loc, log_scale = md(a, time, cond_gen)
     # print(loc.shape, log_scale.shape)
+
     a = torch.randn(32, 1, 28, 28)
     b = torch.randn(32, 1, 28, 28)
     cond = torch.randn(32, 100)
     time = torch.randint(0, 1000, (32,), device=a.device).long()
     md = Cond_Gen(dim=32, channels=1, dim_mults=(1,2,4))
-    md2 = Dis(dim=32, channels=2, dim_mults=(1,2,4,8))
+    # md2 = Dis(dim=32, channels=2, dim_mults=(1,2,4,8))
     res = md(a, time, cond)
-    res2 = md2(a, b, time)
-    print(res.shape, res2.shape)
+    print(res.shape)
+    # res2 = md2(a, b, time)
+    # print(res2.shape)
+
+    print('*'*80)
+    c = torch.randn(32, 1, 28, 28)
+    d = torch.randn(32,100)
+    label = torch.randint(0,10,(32,)).long()
+    time1 = torch.randint(0, 1000, (32,)).long()
+    md3 = c_Gen(dim=32, channels=1, dim_mults=(1,2,4))
+    res2 = md3(c, time1, d, label)
+    print(res2.shape)
+
+    print('*'*80)
+    e = torch.randn(32, 1, 28, 28)
+    f = torch.randn(32, 1, 28, 28)
+    label = torch.randint(0, 10, (32,)).long()
+    time1 = torch.randint(0, 1000, (32,)).long()
+    md4 = c_Dis(dim=32, channels=2, dim_mults=(1, 2, 4))
+    res3 = md4(e, f, time1, label)
+    print(res3.shape)
+
 

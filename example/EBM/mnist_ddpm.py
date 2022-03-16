@@ -12,13 +12,14 @@ import copy
 import numpy as np
 import matplotlib.pyplot as plt
 from utils import plot_fig, get_mnist_loaders
+from torchvision.utils import save_image
 
 
 
-tp = 'cond_mix_gau_ddpm' #
+tp = 'ddpm' #
 
 if tp == 'ddpm':
-    epochs = 20
+    epochs = 10
     ema_decay = 0.9999
     update_ema_every = 10
 
@@ -61,11 +62,13 @@ if tp == 'ddpm':
     shape = (36, 1, 28, 28)
     eta=0.
     res = diffusion.sample(shape)
-    res = res.detach().cpu().numpy()
-    res1 = diffusion.ddim_sample(shape, eta).detach().cpu().numpy()
-    plot_fig(res)
-    plot_fig(res1)
-    plt.show()
+    # res = res.detach().cpu().numpy()
+    res1 = diffusion.ddim_sample(shape, eta)#.detach().cpu().numpy()
+    # plot_fig(res,path='../figures/diff_1.jpg')
+    # plot_fig(res1, path='../figures/diff_2.jpg')
+    save_image(res, '../figures/diff_1.jpg', nrow=6)
+    save_image(res1, '../figures/diff_2.jpg', nrow=6)
+    # plt.show()
 
 
 elif tp == 'cond_ddpm':
