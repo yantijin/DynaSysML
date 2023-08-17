@@ -1,0 +1,12 @@
+.idea
+.vscode
+DynaSysML/__pycache__
+DynaSysML/*/__pycache__
+example/figures/
+example/*/__pycache__
+example/EBM/fig/
+example/pts/
+example/data/
+example/EBM/*.pkl
+example/EBM/*.txt
+venv/
