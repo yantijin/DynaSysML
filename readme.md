@@ -1,3 +1,3 @@
 ```
-pip install git+https://git.cloudcontrolsystems.cn/grad_pro/DynaSysML.git
+pip install git+https://github.com/yantijin/DynaSysML
 ```
