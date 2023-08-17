@@ -1,6 +1,3 @@
-import sys
-
-sys.path.append('/mnt/NewDisk/Python_project/DynaML')
 import torch
 import numpy as np
 import matplotlib.pyplot as plt

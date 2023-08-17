@@ -1,6 +1,7 @@
 from DynaSysML.typing_ import *
 from typing import *
 import torch
+import numpy as np
 
 
 __all__ = [
@@ -228,3 +229,10 @@ def _flip(x, dim):
     indices = [slice(None)] * x.dim()
     indices[dim] = torch.arange(x.size(dim) - 1, -1, -1, dtype=torch.long, device=x.device)
     return x[tuple(indices)]
+
+
+def extract_coeff(a, x_shape):
+    if isinstance(a, torch.Tensor) or isinstance(a, np.ndarray):
+        return a.reshape(x_shape[0], *((1,)*(len(x_shape)-1)))
+    else:
+        raise ValueError('the first arg must be tensor for ndarray')
