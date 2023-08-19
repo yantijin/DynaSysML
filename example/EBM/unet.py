@@ -1100,6 +1100,131 @@ class c_Dis(nn.Module):
         return x
 
 
+class Decoupled_Unet(nn.Module):
+    def __init__(
+        self,
+        dim,
+        out_dim = None,
+        dim_mults=(1, 2, 4, 8),
+        groups = 8,
+        channels = 3,
+        with_time_emb = True
+    ):
+        super().__init__()
+        self.channels = channels
+
+        dims = [channels, *map(lambda m: dim * m, dim_mults)]
+        in_out = list(zip(dims[:-1], dims[1:]))
+
+        if with_time_emb:
+            time_dim = dim
+            self.time_mlp = nn.Sequential(
+                SinusoidalPosEmb(dim),
+                nn.Linear(dim, dim * 4),
+                Mish(),
+                nn.Linear(dim * 4, dim)
+            )
+        else:
+            time_dim = None
+            self.time_mlp = None
+
+        self.downs = nn.ModuleList([])
+        self.ups1 = nn.ModuleList([])
+        self.ups2 = nn.ModuleList([])
+        num_resolutions = len(in_out)
+
+        for ind, (dim_in, dim_out) in enumerate(in_out):
+            is_last = ind >= (num_resolutions - 1)
+
+            self.downs.append(nn.ModuleList([
+                ResnetBlock(dim_in, dim_out, time_emb_dim = time_dim),
+                ResnetBlock(dim_out, dim_out, time_emb_dim = time_dim),
+                Residual(PreNorm(dim_out, LinearAttention(dim_out))),
+                Downsample(dim_out) if not is_last else nn.Identity()
+            ]))
+
+        mid_dim = dims[-1]
+        self.mid_block11 = ResnetBlock(mid_dim, mid_dim, time_emb_dim = time_dim)
+        self.mid_attn1 = Residual(PreNorm(mid_dim, LinearAttention(mid_dim)))
+        self.mid_block12 = ResnetBlock(mid_dim, mid_dim, time_emb_dim = time_dim)
+
+        self.mid_block21 = ResnetBlock(mid_dim, mid_dim, time_emb_dim = time_dim)
+        self.mid_attn2 = Residual(PreNorm(mid_dim, LinearAttention(mid_dim)))
+        self.mid_block22 = ResnetBlock(mid_dim, mid_dim, time_emb_dim = time_dim)
+
+        for ind, (dim_in, dim_out) in enumerate(reversed(in_out[1:])):
+            is_last = ind >= (num_resolutions - 1)
+
+            self.ups1.append(nn.ModuleList([
+                ResnetBlock(dim_out * 2, dim_in, time_emb_dim = time_dim),
+                ResnetBlock(dim_in, dim_in, time_emb_dim = time_dim),
+                Residual(PreNorm(dim_in, LinearAttention(dim_in))),
+                Upsample(dim_in) if not is_last else nn.Identity()
+            ]))
+
+            self.ups2.append(nn.ModuleList([
+                ResnetBlock(dim_out * 2, dim_in, time_emb_dim = time_dim),
+                ResnetBlock(dim_in, dim_in, time_emb_dim = time_dim),
+                Residual(PreNorm(dim_in, LinearAttention(dim_in))),
+                Upsample(dim_in) if not is_last else nn.Identity()
+            ]))
+
+        out_dim = default(out_dim, channels)
+        self.final_conv1 = nn.Sequential(
+            Block(dim, dim),
+            nn.Conv2d(dim, out_dim, 1)
+        )
+
+        self.final_conv2 = nn.Sequential(
+            Block(dim, dim),
+            nn.Conv2d(dim, out_dim, 1)
+        )
+
+    def forward(self, x, t):
+        t = self.time_mlp(t) if exists(self.time_mlp) else None
+
+        h = []
+
+        for resnet, resnet2, attn, downsample in self.downs:
+            x = resnet(x, t)
+            x = resnet2(x, t)
+            x = attn(x)
+            h.append(x)
+            x = downsample(x)
+
+        x1 = self.mid_block11(x, t)
+        x1 = self.mid_attn1(x1)
+        x1 = self.mid_block12(x1, t)
+
+        x2 = self.mid_block21(x, t)
+        x2 = self.mid_attn2(x2)
+        x2 = self.mid_block12(x2, t)
+
+        num = 1
+        for resnet, resnet2, attn, upsample in self.ups1:
+            x1 = torch.cat((x1, h[0-num]), dim=1)
+            x1 = resnet(x1, t)
+            x1 = resnet2(x1, t)
+            x1 = attn(x1)
+            x1 = upsample(x1)
+            num += 1
+
+        x1 = self.final_conv1(x1)
+        num = 1
+        for resnet, resnet2, attn, upsample in self.ups2:
+            x2 = torch.cat((x2, h[0 - num]), dim=1)
+            x2 = resnet(x2, t)
+            x2 = resnet2(x2, t)
+            x2 = attn(x2)
+            x2 = upsample(x2)
+            num += 1
+
+        x2 = self.final_conv2(x2)
+
+        # 第一个返回为tuple，表示phi的所有参数组合
+        return (x1,), x2
+
+
 if __name__ == "__main__":
     # a = torch.randn(32, 3, 28, 28)
     # time = torch.randint(0, 1000, (32,),device=a.device).long()
@@ -1142,3 +1267,8 @@ if __name__ == "__main__":
     print(res3.shape)
 
 
+    g = torch.randn(32, 1, 28, 28)
+    t = torch.randint(0, 100, (32,)).long()
+    md5 = Decoupled_Unet(dim=16, channels=1, dim_mults=(1, 2, 4))
+    res4 = md5(g, t)
+    print(res4[0][0].shape, res4[1].shape)
