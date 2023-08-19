@@ -142,3 +142,72 @@ class DDM_constant(DDM_base):
             cur_time = cur_time - s
         
         return x
+    
+
+class DDM_Linear(DDM_base):
+
+    def get_H_t(self, t, *phi):
+        a, b = phi[0], phi[1]
+        t = t.reshape(t.shape[0], *((1,)*(len(a.shape)-1)))
+        return a / 2 * t ** 2 + b * t
+
+    def get_phi(self, x_0):
+        '''
+        这里是随机给的，合理就行，但哪种更好呢？
+        此处改动后，line208中第二个参数要对应修改
+        '''
+        a = -3 * x_0
+        b = x_0 / 2
+        return (a, b)
+    
+    # Linear的时候还是可以只学一个参数，比如a，另一个根据-x_0 = a/2 +b 反解出来
+    def forward(self, x_0, *args, **kwargs):
+        noise = torch.randn_like(x_0)
+        t = torch.rand((x_0.shape[0],),).to(x_0.device)
+        x_t = self.get_noisy_x(x_0, t, noise)
+
+        denoise_par = self.get_denoise_par(t, *args, **kwargs)     
+        phi_theta, eps_theta = self.net(x_t, *denoise_par)
+
+        phi = self.get_phi(x_0)
+        loss_phi_term = F.mse_loss(phi[0], phi_theta[0])
+        loss = loss_phi_term + F.mse_loss(noise, eps_theta)
+        return loss
+    
+    def pred_x_start(self, x_t, noise, phi, t):
+        t = t.reshape(t.shape[0], *((1,)*(len(x_t.shape)-1)))
+        if t[0] == 1.:
+            print('aaa')
+            den = 1 - t + self.eps
+        else:
+            den = 1 - t
+        x_0 = ( x_t - t.sqrt() * noise + phi[0] * t * (1 - t) ) / den
+        return x_0
+ 
+
+    def sample_loop(self, x, num_steps, denoise=True,  clamp=True, *args, **kwargs):
+        bs = x.shape[0]
+
+        step = 1. / num_steps
+        time_steps = torch.tensor([step]).repeat(num_steps)
+        if denoise:
+            time_steps = torch.cat((time_steps[:-1], torch.tensor([step - self.eps]), torch.tensor([self.eps])), dim=0)
+
+        cur_time = torch.ones((bs, ), device=x.device)
+        for i, time_step in enumerate(time_steps):
+            s = torch.full((bs,), time_step, device=x.device)
+            if i == time_steps.shape[0] - 1:
+                s = cur_time
+
+            denoise_par = self.get_denoise_par(cur_time, *args, **kwargs)
+            phi_theta, eps_theta = self.net(x, *denoise_par)
+
+            x_0 = self.pred_x_start(x, eps_theta, phi_theta, cur_time)
+            if clamp:
+                x_0.clamp_(-1., 1.)
+            phi_new = (phi_theta[0], x_0 / 2)
+
+            x = self.predict_xtm1_xt(x, phi_new, eps_theta, cur_time, s)
+            cur_time = cur_time - s
+        
+        return x
